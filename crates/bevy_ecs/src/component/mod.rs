@@ -445,6 +445,28 @@ use core::{fmt::Debug, marker::PhantomData, ops::Deref};
 ///
 /// ```
 ///
+/// # Add observers when this component is added
+///
+/// Some common use-cases for observers include enforcing invariants related to component values
+/// or attaching behavior to all instances of an entity "prototype" defined by a marker component.
+///
+/// As an ergonomic shorthand for these patterns, you can declare observers that will be added
+/// any time this component gets added to an entity.
+/// ```
+/// # use bevy_ecs::prelude::*;
+///
+/// #[derive(Component)]
+/// #[observe(say_goodbye)]
+/// struct HelloComponent;
+///
+/// fn say_goodbye(event: On<Despawn>) {
+///     println!("Goodbye!");
+/// }
+/// ```
+/// Note that if the component is ever removed and re-added to the same entity, the observer
+/// will likewise be re-added and the old one won't be cleaned up. If your component might
+/// be added and removed multiple times, it's probably not a good use-case for declarative observers.
+///
 /// # Implementing the trait for foreign types
 ///
 /// As a consequence of the [orphan rule], it is not possible to separate into two different crates the implementation of `Component` from the definition of a type.
