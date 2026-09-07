@@ -589,6 +589,82 @@
 //!
 //! We plan on making "conditional scenes" easier to define in future releases.
 //!
+//! ## Reactive Fields (experimental)
+//!
+//! Values written with `{...}` are evaluated once, when the scene is built. A field becomes
+//! *reactive* when its value mentions a `$` source, in which case it is re-evaluated whenever that
+//! source changes:
+//!
+//! ```ignore
+//! bsn! {
+//!     Health {
+//!         current: $hp_signal,                  // a lone source
+//!         max: {$base_max + $bonus_signal},     // an expression over several
+//!     }
+//! }
+//! ```
+//!
+//! ### Sources
+//!
+//! A `$` source is one of:
+//!
+//! | Syntax | Tracks |
+//! |---|---|
+//! | `$signal` | a [`Signal`](bevy_ecs::signal::Signal), or any value implementing [`ReactiveSource`](bevy_ecs::signal::source::ReactiveSource) |
+//! | `$(self, C)` | component `C` on the entity being spawned |
+//! | `$(entity, C)` | component `C` on an [`Entity`] value in scope |
+//! | `$(#Name, C)` | component `C` on a `#Name` entity in the same scene |
+//! | `$(R)` | resource `R` |
+//!
+//! `$(self, C)` is the "react to a component I already have" case and needs no entity plumbing —
+//! the effect already knows its own target. Component sources are updated by ordinary mutation
+//! from an ordinary system; no reactivity-specific setter is involved:
+//!
+//! ```ignore
+//! fn damage(mut query: Query<&mut Health>) {
+//!     for mut health in &mut query { health.current -= 1; }
+//! }
+//! ```
+//!
+//! ### The expression is pure
+//!
+//! Each `$` becomes one entry in the field's source tuple, and the surrounding expression is a
+//! *pure* function of the read values. A field's dependencies are therefore exactly its declared
+//! `$` sources — there is no way to read something that is not tracked, and the dependency set
+//! stays syntactically visible.
+//!
+//! That is why resources are a source rather than something you reach for with a system param: a
+//! theme or settings resource read through `Res<Theme>` would leave the field silently stale when
+//! the theme changed. `$(Theme)` is tracked.
+//!
+//! For computations that genuinely need broader world access, the intended answer is a derived
+//! value defined outside the `bsn!` block, used here as an ordinary `$source`.
+//!
+//! Updates are surgical: when a source changes, just that field of that component on that entity is
+//! written — no re-resolve, no other component touched, no archetype move. The effect is tied to
+//! the spawned entity's lifetime and is despawned with it.
+//!
+//! Updates are applied by [`World::run_effects`](bevy_ecs::world::World::run_effects), which is not
+//! yet wired into any schedule; call it yourself for now.
+//!
+//! ### Limitations
+//!
+//! - There is no implicit `.into()`, unlike `{...}` values. The expression must produce the field's
+//!   exact type.
+//! - `$` is only valid on the **top-level fields of a component patch**. Nested fields, enum variant
+//!   fields, and scene component props are rejected with a compile error.
+//! - A source yields [`Default`] if it is missing (a despawned signal, or an absent component), so
+//!   absence and a default value are indistinguishable.
+//! - Reactive fields do not participate in patch overriding: a later static patch of the same field
+//!   will not replace an inherited reactive one, and two reactive patches of the same field will
+//!   both stay live and fight. Effects run in registration order within a flush, so the later one
+//!   wins — but relying on that is not advised.
+//! - `$` cannot be used inside a `macro_rules!` body, since `$` is consumed for metavariables
+//!   before `bsn!` sees it.
+//!
+//! The equivalent can be written by hand with [`reactive_field`], which is what `$` expands to.
+//! [`reactive_field_deduped`] additionally skips writes when the value is unchanged.
+//!
 //! ## Scene Components
 //!
 //! A [`SceneComponent`] is a specialized type of [`Component`] that has an associated [`Scene`]:
@@ -910,6 +986,7 @@ pub mod macro_utils;
 
 extern crate alloc;
 
+mod reactive;
 mod resolved_scene;
 mod scene;
 mod scene_component;
@@ -918,6 +995,7 @@ mod scene_patch;
 mod spawn;
 mod spawn_system;
 
+pub use reactive::*;
 pub use resolved_scene::*;
 pub use scene::*;
 pub use scene_component::*;

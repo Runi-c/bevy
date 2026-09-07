@@ -49,6 +49,7 @@ pub mod reflect;
 pub mod relationship;
 pub mod resource;
 pub mod schedule;
+pub mod signal;
 pub mod spawn;
 pub mod storage;
 pub mod system;

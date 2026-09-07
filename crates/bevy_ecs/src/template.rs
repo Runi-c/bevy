@@ -8,6 +8,7 @@ use crate::{
     entity::Entity,
     error::{BevyError, Result},
     resource::Resource,
+    signal::{BoxedEffectRegistration, QueuedEffects},
     world::{EntityWorldMut, Mut, World},
 };
 use alloc::vec::Vec;
@@ -47,6 +48,9 @@ pub struct TemplateContext<'a, 'w> {
     pub entity: &'a mut EntityWorldMut<'w>,
     /// A mapping of [`SceneEntityReference`] to [`Entity`] used for resolving `#Name` entity references
     pub entity_references: &'a mut SceneEntityReferences,
+    /// Effects registered by templates built with this context, to be flushed once the entity has
+    /// been fully written. See [`TemplateContext::queue_effect`].
+    effects: QueuedEffects,
 }
 
 impl<'a, 'w> TemplateContext<'a, 'w> {
@@ -58,7 +62,27 @@ impl<'a, 'w> TemplateContext<'a, 'w> {
         Self {
             entity,
             entity_references,
+            effects: QueuedEffects::default(),
         }
+    }
+
+    /// Queues a reactive effect to be registered on this entity.
+    ///
+    /// Templates cannot spawn effects directly: components are batched into a single write, so
+    /// during [`Template::build_template`] the component an effect targets may not exist on the
+    /// entity yet. Instead, registrations are queued here and the caller flushes them (via
+    /// [`TemplateContext::take_effects`]) after the entity is fully written.
+    ///
+    /// See [`FieldEffect`](crate::signal::FieldEffect).
+    pub fn queue_effect(&mut self, registration: BoxedEffectRegistration) {
+        self.effects.push(registration);
+    }
+
+    /// Takes the effects queued by [`TemplateContext::queue_effect`], leaving the queue empty.
+    ///
+    /// Callers should [`QueuedEffects::flush`] the result once the entity has been fully written.
+    pub fn take_effects(&mut self) -> QueuedEffects {
+        core::mem::take(&mut self.effects)
     }
     /// Get the entity associated with the [`SceneEntityReference`], spawning a new one
     /// if this is the first call with this index.

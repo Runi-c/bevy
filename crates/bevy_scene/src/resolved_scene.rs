@@ -309,6 +309,17 @@ impl ResolvedScene {
         };
 
         let entity = context.entity.id();
+
+        // Reactive effects are registered only after the entity is fully written, so the
+        // components they surgically update are guaranteed to be present. See
+        // `TemplateContext::queue_effect`.
+        let mut effects = context.take_effects();
+        if !effects.is_empty() {
+            context
+                .entity
+                .world_scope(|world| effects.flush(world, entity));
+        }
+
         context.entity.world_scope(|world| {
             world.trigger(Ready { entity });
         });
@@ -361,6 +372,7 @@ impl ResolvedScene {
             let TemplateContext {
                 entity,
                 entity_references,
+                ..
             } = context;
             entity.world_scope(|world| -> Result<(), ApplySceneError> {
                 for (index, scene) in related_resolved_scenes.scenes.iter().enumerate() {

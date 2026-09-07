@@ -39,6 +39,8 @@ fn bsn_token_stream<T: BsnTokenStream>(input: TokenStream) -> TokenStream {
         invocation_index: parse_quote!((#file, #line, #column)),
         hoisted_expressions: &mut hoisted_expressions,
         errors: Vec::new(),
+        reactive_fields: Vec::new(),
+        reactive_allowed: false,
     };
 
     TokenStream::from(scene.to_tokens(&mut ctx))

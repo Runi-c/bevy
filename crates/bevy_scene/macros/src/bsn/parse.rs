@@ -5,7 +5,7 @@ use crate::_bsn::types::{
 };
 use bevy_macro_utils::{path_to_string, PathType};
 use proc_macro2::{Delimiter, TokenStream, TokenTree};
-use quote::quote;
+use quote::{quote, ToTokens};
 use syn::{
     braced, bracketed,
     buffer::Cursor,
@@ -488,10 +488,110 @@ fn tokens_between(begin: Cursor, end: Cursor) -> TokenStream {
     tokens
 }
 
+/// Returns true if the next token is a `$` punct.
+///
+/// `$` has no `Token![..]` equivalent in `syn` (it is reserved for `macro_rules`), so it has to be
+/// matched off the raw cursor.
+fn peek_dollar(input: ParseStream) -> bool {
+    input
+        .cursor()
+        .punct()
+        .is_some_and(|(punct, _)| punct.as_char() == '$')
+}
+
+/// Captures a `$ident` or `$(..)` reactive source as raw tokens, including the `$`.
+///
+/// The tokens are rewritten later, during codegen, which is where `#Name` references can be
+/// assigned indices.
+fn parse_reactive_source(input: ParseStream) -> Result<TokenStream> {
+    input.step(|cursor| {
+        let Some((dollar, rest)) = cursor.punct().filter(|(p, _)| p.as_char() == '$') else {
+            return Err(cursor.error("expected `$`"));
+        };
+        let Some((source, rest)) = rest.token_tree() else {
+            return Err(syn::Error::new(
+                dollar.span(),
+                "expected an identifier or `(entity, Component)` after `$`",
+            ));
+        };
+        Ok((
+            TokenStream::from_iter([TokenTree::Punct(dollar), source]),
+            rest,
+        ))
+    })
+}
+
+/// Returns true if `tokens` contains a `$` at any nesting depth.
+pub(crate) fn contains_dollar(tokens: &TokenStream) -> bool {
+    tokens.clone().into_iter().any(|token| match token {
+        TokenTree::Punct(punct) => punct.as_char() == '$',
+        TokenTree::Group(group) => contains_dollar(&group.stream()),
+        _ => false,
+    })
+}
+
+/// The `(entity, Component)` spec inside a `$(..)` source.
+pub struct ReactiveSourceSpec {
+    pub entity: ReactiveEntity,
+    pub component: Path,
+}
+
+/// Which entity a `$(..)` source tracks its component on.
+pub enum ReactiveEntity {
+    /// `self` — the entity the effect is attached to.
+    Own,
+    /// No entity — the tracked item is a resource.
+    Resource,
+    /// `#Name` — a scene entity reference, resolved when the scene is applied.
+    Name(Ident),
+    /// Any expression evaluating to something convertible to an `EntityTemplate`.
+    Expr(TokenStream),
+}
+
+impl Parse for ReactiveSourceSpec {
+    fn parse(input: ParseStream) -> Result<Self> {
+        // `$(SomeResource)` — a lone type path, with no entity, is a resource source.
+        let fork = input.fork();
+        if let Ok(path) = fork.parse::<Path>()
+            && fork.is_empty()
+        {
+            input.advance_to(&fork);
+            return Ok(Self {
+                entity: ReactiveEntity::Resource,
+                component: path,
+            });
+        }
+
+        let entity = if input.peek(Token![self]) {
+            input.parse::<Token![self]>()?;
+            ReactiveEntity::Own
+        } else if input.peek(Token![#]) {
+            input.parse::<Token![#]>()?;
+            ReactiveEntity::Name(input.parse::<Ident>()?)
+        } else {
+            // `syn::Expr` stops at the top-level comma, which separates the two halves.
+            ReactiveEntity::Expr(input.parse::<syn::Expr>()?.to_token_stream())
+        };
+        input.parse::<Comma>().map_err(|_| {
+            input.error("expected `, Component` after the entity in a `$(..)` reactive source")
+        })?;
+        let component = input.parse::<Path>()?;
+        Ok(Self { entity, component })
+    }
+}
+
 impl Parse for BsnValue {
     fn parse(input: ParseStream) -> Result<Self> {
-        Ok(if input.peek(Brace) {
-            BsnValue::Expr(braced_tokens(input)?)
+        Ok(if peek_dollar(input) {
+            BsnValue::Reactive(parse_reactive_source(input)?)
+        } else if input.peek(Brace) {
+            let tokens = braced_tokens(input)?;
+            // A braced expression mentioning `$` anywhere becomes a reactive value.
+            if contains_dollar(&tokens) {
+                BsnValue::Reactive(tokens)
+            } else {
+                BsnValue::Expr(tokens)
+            }
         } else if input.peek(Token![const]) && input.peek2(Brace) {
             let const_token = input.parse::<Token![const]>()?;
             let braced = braced_tokens(input)?;

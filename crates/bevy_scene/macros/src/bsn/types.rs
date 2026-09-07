@@ -113,6 +113,9 @@ pub enum BsnValue {
     Type(BsnType),
     Tuple(BsnTuple),
     Name(Ident),
+    /// A `$(...)` reactive value. The expression is evaluated inside an effect, with `ctx: &mut
+    /// EffectContext` in scope, and re-evaluated whenever a source it tracked changes.
+    Reactive(TokenStream),
 }
 
 #[derive(Debug)]
